@@ -17,7 +17,7 @@ from __future__ import absolute_import, division, print_function
 
 import torch
 import torch.nn.functional as F
-from torchvision.transforms import Normalize
+from torchvision.transforms import Normalize, RandomAffine
 import numpy as np
 import kornia
 from kornia.geometry.transform import translate
@@ -123,10 +123,15 @@ def preprocess_inceptionv1():
     return lambda x: x * 255 - 117
 
 
+# standard_transforms = [
+#     pad(12, mode="constant", constant_value=0.5),
+#     jitter(8),
+#     random_scale([1 + (i - 5) / 50.0 for i in range(11)]),
+#     random_rotate(list(range(-10, 11)) + 5 * [0]),
+#     jitter(4),
+# ]
+
 standard_transforms = [
-    pad(12, mode="constant", constant_value=0.5),
-    jitter(8),
-    random_scale([1 + (i - 5) / 50.0 for i in range(11)]),
-    random_rotate(list(range(-10, 11)) + 5 * [0]),
-    jitter(4),
+    RandomAffine(8, translate=(0.04, 0.04), scale=(0.9, 1.1)),
+    RandomAffine(4)
 ]

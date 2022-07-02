@@ -346,6 +346,12 @@ def diversity(layer):
     return inner
 
 
+@wrap_objective()
+def custom_objective(custom_objective_func, batch=None):
+    """Write a custom objective function given the model layer"""
+    return handle_batch(batch)(custom_objective_func)
+
+
 def as_objective(obj):
     """Convert obj into Objective class.
 
