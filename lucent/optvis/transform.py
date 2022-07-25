@@ -131,6 +131,12 @@ def preprocess_inceptionv1():
 #     jitter(4),
 # ]
 
+def standard_transforms_func(rotate1=8, rotate2=4, translate=0.04, scale=0.1):
+    return [
+        RandomAffine(rotate1, translate=(translate, translate), scale=(1-scale, 1+scale)),
+        RandomAffine(rotate2)
+    ]
+
 standard_transforms = [
     RandomAffine(8, translate=(0.04, 0.04), scale=(0.9, 1.1)),
     RandomAffine(4)

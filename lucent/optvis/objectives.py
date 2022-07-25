@@ -186,7 +186,6 @@ def direction(layer, direction, batch=None):
         Objective
 
     """
-
     @handle_batch(batch)
     def inner(model):
         return -torch.nn.CosineSimilarity(dim=1)(direction.reshape(
@@ -347,9 +346,197 @@ def diversity(layer):
 
 
 @wrap_objective()
+def L2(layer="input", batch=None):
+    """L2 norm of layer. Generally used as penalty."""
+    @handle_batch(batch)
+    def inner(model):
+        # print(model(layer).shape)
+        # print(torch.linalg.norm(model(layer)))
+        return torch.linalg.norm(model(layer))
+    return inner
+
+
+@wrap_objective()
 def custom_objective(custom_objective_func, batch=None):
     """Write a custom objective function given the model layer"""
     return handle_batch(batch)(custom_objective_func)
+
+
+# ViT and MLP-Mixer objectives
+@wrap_objective()
+def neuron_two_index(layer, layer_ix, neuron_ix, batch=None):
+    """Write a custom objective function given the model layer"""
+    @handle_batch(batch)
+    def inner(model):
+        return -model(layer)[layer_ix, :, neuron_ix].mean()
+    return inner
+
+
+@wrap_objective()
+def patch(layer, neuron_ix, batch=None):
+    """Write a custom objective function given the model layer"""
+    @handle_batch(batch)
+    def inner(model):
+        return -model(layer)[:, :, neuron_ix].mean()
+    return inner
+
+
+@wrap_objective()
+def layer_diversity(layer):
+    """Encourage diversity between each batch element.
+
+    A neural net feature often responds to multiple things, but naive feature
+    visualization often only shows us one. If you optimize a batch of images,
+    this objective will encourage them all to be different.
+
+    In particular, it calculates an approximation of the correlation matrix of 
+    activations at layer, namely the gram matrix, for each image, and then 
+    penalizes cosine similarity between them. This is very similar to ideas 
+    in style transfer, except we're *penalizing* style similarity instead of 
+    encouraging it.
+
+    Args:
+        layer: layer to evaluate activation correlations on.
+
+    Returns:
+        Objective.
+    """
+    def inner(model):
+        layer_t = model(layer)
+        patches, batch, _ = layer_t.shape
+        flattened = layer_t.view(batch, patches, -1)
+
+        # Wow this is the gram matrix: https://en.wikipedia.org/wiki/Gram_matrix
+        # grams = torch.matmul(flattened, torch.transpose(flattened, 1, 2))
+        grams = torch.matmul(flattened, torch.transpose(flattened, 1, 2))/1000
+        # print(grams)
+        
+        # print(torch.linalg.norm(grams))
+        grams = F.normalize(grams, p=2, dim=(1, 2))
+        # grams = torch.linarg.matrix_norm(grams)
+
+        # print(grams)
+
+        # print(-sum([ sum([ (grams[i]*grams[j]).sum()
+        #        for j in range(batch) if j != i])
+        #        for i in range(batch)]) / batch)
+
+        return -sum([ sum([ (grams[i]*grams[j]).sum()
+               for j in range(batch) if j != i])
+               for i in range(batch)]) / batch
+    return inner
+
+@wrap_objective()
+def patch_diversity(layer, ix1):
+    """Encourage diversity between each batch element.
+
+    A neural net feature often responds to multiple things, but naive feature
+    visualization often only shows us one. If you optimize a batch of images,
+    this objective will encourage them all to be different.
+
+    In particular, it calculates the correlation matrix of activations at layer
+    for each image, and then penalizes cosine similarity between them. This is
+    very similar to ideas in style transfer, except we're *penalizing* style
+    similarity instead of encouraging it.
+
+    Args:
+        layer: layer to evaluate activation correlations on.
+
+    Returns:
+        Objective.
+    """
+    def inner(model):
+        patch_t = model(layer)[ix1]
+        batch, _ = patch_t.shape
+        flattened = patch_t.view(batch, -1)
+        # correlation_matrix = torch.corrcoef(flattened)
+        # return -torch.sum(correlation_matrix)
+
+
+        # print(flattened)
+        # print(F.cosine_similarity(flattened, torch.roll(flattened, 1, 0)))
+        # print(torch.roll(flattened, 1, 0))
+        # return F.cosine_similarity(flattened, torch.roll(flattened, 1, 0)).sum()
+
+        # print(flattened.shape)
+        # sin = sqrt (1 - (cos theta)^2), this might be better for diversity because it is 0 when they are orthogonal, so very different, but 1 if they are very similar 
+        # grams = torch.matmul(flattened, flattened.T)
+        # print(grams.shape)
+        grams = F.normalize(flattened, p=2, dim=1)
+        # print(grams.shape)
+        return -sum([sum([(grams[i]*grams[j]).sum()
+               for j in range(batch) if j != i])
+               for i in range(batch)]) / batch
+    return inner
+
+
+@wrap_objective()
+def neuron_two_index_diversity(layer, ix1, ix2):
+    """Encourage diversity between each batch element.
+
+    A neural net feature often responds to multiple things, but naive feature
+    visualization often only shows us one. If you optimize a batch of images,
+    this objective will encourage them all to be different.
+
+    In particular, it calculates the correlation matrix of activations at layer
+    for each image, and then penalizes cosine similarity between them. This is
+    very similar to ideas in style transfer, except we're *penalizing* style
+    similarity instead of encouraging it.
+
+    Args:
+        layer: layer to evaluate activation correlations on.
+
+    Returns:
+        Objective.
+    """
+    def inner(model):
+        layer_t = model(layer)
+        # model(layer)[ix1][0][ix2]
+        batch, channels, _, _ = layer_t.shape
+        flattened = layer_t.view(batch, channels, -1)
+        grams = torch.matmul(flattened, torch.transpose(flattened, 1, 2))
+        grams = F.normalize(grams, p=2, dim=(1, 2))
+        return -sum([ sum([ (grams[i]*grams[j]).sum()
+               for j in range(batch) if j != i])
+               for i in range(batch)]) / batch
+    return inner
+
+
+@wrap_objective()
+def attention_pre_softmax_neuron(layer, transformer_input, head_ix, patch_ix, softmax_neuron_ix, num_attention_heads=6):
+    """Encourage diversity between each batch element.
+
+    A neural net feature often responds to multiple things, but naive feature
+    visualization often only shows us one. If you optimize a batch of images,
+    this objective will encourage them all to be different.
+
+    In particular, it calculates the correlation matrix of activations at layer
+    for each image, and then penalizes cosine similarity between them. This is
+    very similar to ideas in style transfer, except we're *penalizing* style
+    similarity instead of encouraging it.
+
+    Args:
+        layer: layer to evaluate activation correlations on.
+
+    Returns:
+        Objective.
+    """
+
+    def inner(model):
+        layer_t = model(layer)
+        # print(model("blocks_0_norm1"))
+        # print(model("blocks_0_norm1").shape)
+
+        # TODO: Maybe fix how transformer input is used here, this is kinda awk
+        BATCHES, PATCHES, D_MODEL = model(transformer_input).shape
+
+        qkv = layer_t.reshape(BATCHES, PATCHES, 3, num_attention_heads, D_MODEL // num_attention_heads).permute(2, 0, 3, 1, 4)
+        q, k = qkv[0], qkv[1]
+
+        attn = (q @ k.transpose(-2, -1)) * (D_MODEL // num_attention_heads)
+        
+        return attn[:, head_ix, patch_ix, softmax_neuron_ix].mean()
+    return inner
 
 
 def as_objective(obj):

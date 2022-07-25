@@ -21,8 +21,10 @@ import numpy as np
 from tqdm import tqdm
 from PIL import Image
 import torch
+from torch.nn.modules.upsampling import Upsample
+import os
 
-from lucent.optvis import objectives, transform, param
+from lucent.optvis import objectives, transform, param, visualizations
 from lucent.misc.io import show
 
 
@@ -133,6 +135,40 @@ def render_vis(
     return images
 
 
+def render_attention(
+    model,
+    visualization,
+    input_image_array,
+    img_size=224,
+    # verbose=False,
+    show_image=True,
+    save_image=False,
+    image_name=None,
+    show_inline=False,
+):
+    hook = hook_model(model)
+    # visualization_f = visualizations.as_visualization(visualization)
+    model(img_array_to_tensor(input_image_array))
+    tensor_visualization = visualization(hook)
+
+    tensor_visualization = Upsample(scale_factor=img_size//tensor_visualization.shape[-1], mode='nearest')(tensor_visualization)
+
+    if save_image:
+        export(tensor_visualization, image_name)
+    if show_inline:
+        show(tensor_to_img_array(tensor_visualization))
+    elif show_image:
+        view(tensor_visualization)
+    return tensor_visualization
+
+
+def img_array_to_tensor(img_array):
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    img_array = np.transpose(img_array, [0, 3, 1, 2])
+    tensor = torch.from_numpy(img_array).to(device).requires_grad_(True)
+    return tensor
+
+
 def tensor_to_img_array(tensor):
     image = tensor.cpu().detach().numpy()
     image = np.transpose(image, [0, 2, 3, 1])
@@ -155,6 +191,7 @@ def view(tensor):
 def export(tensor, image_name=None):
     image_name = image_name or "image.jpg"
     image = tensor_to_img_array(tensor)
+
     assert len(image.shape) in [
         3,
         4,
@@ -163,6 +200,12 @@ def export(tensor, image_name=None):
     image = (image * 255).astype(np.uint8)
     if len(image.shape) == 4:
         image = np.concatenate(image, axis=1)
+    
+    try:
+        os.makedirs(os.path.dirname(image_name), exist_ok=True)
+    except Exception as e:
+        print(e)
+
     Image.fromarray(image).save(image_name)
 
 
@@ -180,7 +223,7 @@ class ModuleHook:
         self.hook.remove()
 
 
-def hook_model(model, image_f):
+def hook_model(model, image_f=None):
     features = OrderedDict()
 
     # recursive hooking function
@@ -197,6 +240,7 @@ def hook_model(model, image_f):
 
     def hook(layer):
         if layer == "input":
+            assert image_f is not None, "image_f must be passed into hook_model() if input layer is accessed"
             out = image_f()
         elif layer == "labels":
             out = list(features.values())[-1].features

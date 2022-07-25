@@ -35,7 +35,7 @@ def get_model_layers(model, getLayerRepr=False):
                 if getLayerRepr:
                     layers["_".join(prefix+[name])] = layer.__repr__()
                 else:
-                    layers.append("_".join(prefix + [name]))
+                    layers.append("_".join(prefix+[name]))
                 get_layers(layer, prefix=prefix+[name])
 
     get_layers(model)
