@@ -65,6 +65,38 @@ def deit_attention_pattern(layer, transformer_input, head_ix, patch_ix, num_atte
 
     return inner
 
+def attention_pattern_finder(patch_ix, total_patches):
+    """Encourage diversity between each batch element.
+
+    A neural net feature often responds to multiple things, but naive feature
+    visualization often only shows us one. If you optimize a batch of images,
+    this objective will encourage them all to be different.
+
+    In particular, it calculates the correlation matrix of activations at layer
+    for each image, and then penalizes cosine similarity between them. This is
+    very similar to ideas in style transfer, except we're *penalizing* style
+    similarity instead of encouraging it.
+
+    Args:
+        layer: layer to evaluate activation correlations on.
+
+    Returns:
+        Tensor of visualization in right size
+    """
+
+    def inner():
+        patch_dim = round((total_patches - 1)**0.5)
+        final_img = torch.zeros(1, 3, patch_dim, patch_dim)
+        
+        color_channel = torch.zeros(total_patches - 1)
+        color_channel[max(patch_ix - 1, 0)] = 1
+
+        final_img[0, 1] = color_channel.reshape(patch_dim, patch_dim)
+        final_img[0, 2] = color_channel.reshape(patch_dim, patch_dim)
+        return final_img
+
+    return inner
+
 # class Visualizations():
 
 #     def __init__(self, objective_func, name="", description=""):

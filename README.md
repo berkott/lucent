@@ -2,6 +2,13 @@
 
 # Lucent
 
+
+TODO:
+- Should I move the model hooks into the param folder or into some other folder??? I'm not sure bc its a bit awk rn where it is...
+- Should I make getting model weights really easy??
+- I also have to add a bunch of tests for all my functions!!!!
+
+
 <!--*It's still magic even if you know how it's done. GNU Terry Pratchett*-->
 
 [![Travis build status](https://img.shields.io/travis/greentfrapp/lucent.svg)](https://travis-ci.org/greentfrapp/lucent)

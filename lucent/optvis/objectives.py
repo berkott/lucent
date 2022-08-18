@@ -23,28 +23,55 @@ from lucent.optvis.objectives_util import _make_arg_str, _extract_act_pos, _T_ha
 
 
 class Objective():
-
+    
     def __init__(self, objective_func, name="", description=""):
         self.objective_func = objective_func
         self.name = name
         self.description = description
 
-    def __call__(self, model):
-        return self.objective_func(model)
+    def __call__(self, model, *args):
+        # if model_2:
+        #     print(model_2)
+        #     print(self.objective_func)
+        #     print(self.objective_func)
+        #     import inspect
+  
+        #     print(inspect.getargspec(self.objective_func))
+        # return self.objective_func(model, model_2) if model_2 else self.objective_func(model)
+
+        try:
+            return self.objective_func(model, *args)
+        except TypeError:
+            return self.objective_func(model)
+
+        # return self.objective_func(model, *args)
 
     def __add__(self, other):
         if isinstance(other, (int, float)):
-            objective_func = lambda model: other + self(model)
+            objective_func = lambda model, *args: other + self(model, *args)
+            try:
+                objective_func = lambda model, *args: other + self(model, *args)
+            except TypeError:
+                objective_func = lambda model: other + self(model)
             name = self.name
             description = self.description
         else:
-            objective_func = lambda model: self(model) + other(model)
+            try:
+                objective_func = lambda model, *args: self(model, *args) + other(model, *args)
+            except TypeError:
+                try:
+                    objective_func = lambda model, *args: self(model, *args) + other(model)
+                except TypeError:
+                    objective_func = lambda model, *args: self(model) + other(model, *args)
+            
             name = ", ".join([self.name, other.name])
             description = "Sum(" + " +\n".join([self.description, other.description]) + ")"
         return Objective(objective_func, name=name, description=description)
 
     @staticmethod
     def sum(objs):
+        # objective_func = lambda T, *args: sum([obj(T, *args) for obj in objs])
+        # TODO: Do I need the *args?
         objective_func = lambda T: sum([obj(T) for obj in objs])
         descriptions = [obj.description for obj in objs]
         description = "Sum(" + " +\n".join(descriptions) + ")"
@@ -60,7 +87,10 @@ class Objective():
 
     def __mul__(self, other):
         if isinstance(other, (int, float)):
-            objective_func = lambda model: other * self(model)
+            try:
+                objective_func = lambda model, *args: other * self(model, *args)
+            except TypeError:
+                objective_func = lambda model: other * self(model)
             return Objective(objective_func, name=self.name, description=self.description)
         else:
             # Note: In original Lucid library, objectives can be multiplied with non-numbers
@@ -91,6 +121,7 @@ def wrap_objective():
     return inner
 
 
+# TODO: add *args to this func
 def handle_batch(batch=None):
     return lambda f: lambda model: f(_T_handle_batch(model, batch=batch))
 
@@ -364,11 +395,20 @@ def custom_objective(custom_objective_func, batch=None):
 
 # ViT and MLP-Mixer objectives
 @wrap_objective()
-def neuron_two_index(layer, layer_ix, neuron_ix, batch=None):
+def neuron_two_index(layer, patch_ix, neuron_ix, batch=None):
     """Write a custom objective function given the model layer"""
     @handle_batch(batch)
     def inner(model):
-        return -model(layer)[layer_ix, :, neuron_ix].mean()
+        return -model(layer)[patch_ix, :, neuron_ix].mean()
+    return inner
+
+
+@wrap_objective()
+def residual_stream(layer, patch_ix, neuron_ix, batch=None):
+    """Write a custom objective function given the model layer"""
+    @handle_batch(batch)
+    def inner(model):
+        return -model(layer)[:, patch_ix, neuron_ix].mean()
     return inner
 
 
@@ -503,7 +543,7 @@ def neuron_two_index_diversity(layer, ix1, ix2):
 
 
 @wrap_objective()
-def attention_pre_softmax_neuron(layer, transformer_input, head_ix, patch_ix, softmax_neuron_ix, num_attention_heads=6):
+def attention_pre_softmax_neuron(layer, transformer_input, head_ix, q_ix, k_ix, num_attention_heads=6):
     """Encourage diversity between each batch element.
 
     A neural net feature often responds to multiple things, but naive feature
@@ -528,14 +568,168 @@ def attention_pre_softmax_neuron(layer, transformer_input, head_ix, patch_ix, so
         # print(model("blocks_0_norm1").shape)
 
         # TODO: Maybe fix how transformer input is used here, this is kinda awk
-        BATCHES, PATCHES, D_MODEL = model(transformer_input).shape
+        batches, patches, d_model = model(transformer_input).shape
 
-        qkv = layer_t.reshape(BATCHES, PATCHES, 3, num_attention_heads, D_MODEL // num_attention_heads).permute(2, 0, 3, 1, 4)
+        qkv = layer_t.reshape(batches, patches, 3, num_attention_heads, d_model // num_attention_heads).permute(2, 0, 3, 1, 4)
         q, k = qkv[0], qkv[1]
 
-        attn = (q @ k.transpose(-2, -1)) * (D_MODEL // num_attention_heads)
+        # 1, num_heads, num_patches, num_patches
+        attn = (q @ k.transpose(-2, -1)) * (d_model // num_attention_heads)
+                
+        return attn[:, head_ix, q_ix, k_ix].mean()
+    return inner
+
+
+@wrap_objective()
+def attention_post_softmax_neuron(layer, transformer_input, head_ix, q_ix, k_ix, num_attention_heads=6):
+    """Encourage diversity between each batch element.
+
+    A neural net feature often responds to multiple things, but naive feature
+    visualization often only shows us one. If you optimize a batch of images,
+    this objective will encourage them all to be different.
+
+    In particular, it calculates the correlation matrix of activations at layer
+    for each image, and then penalizes cosine similarity between them. This is
+    very similar to ideas in style transfer, except we're *penalizing* style
+    similarity instead of encouraging it.
+
+    Args:
+        layer: layer to evaluate activation correlations on.
+
+    Returns:
+        Objective.
+    """
+
+    def inner(model):
+        layer_t = model(layer)
+        # print(model("blocks_0_norm1"))
+        # print(model("blocks_0_norm1").shape)
+
+        # TODO: Maybe fix how transformer input is used here, this is kinda awk
+        batches, patches, d_model = model(transformer_input).shape
+
+        qkv = layer_t.reshape(batches, patches, 3, num_attention_heads, d_model // num_attention_heads).permute(2, 0, 3, 1, 4)
+        q, k = qkv[0], qkv[1]
+
+        # 1, num_heads, num_patches, num_patches
+        attn = (q @ k.transpose(-2, -1)) * (d_model // num_attention_heads)
+        attn = attn.softmax(dim=-1)
+                
+        return attn[:, head_ix, q_ix, k_ix].mean()
+    return inner
+
+
+@wrap_objective()
+def attention_pre_softmax_max_key(layer, transformer_input, head_ix, q_ix, num_attention_heads=6):
+    """Encourage diversity between each batch element.
+
+    A neural net feature often responds to multiple things, but naive feature
+    visualization often only shows us one. If you optimize a batch of images,
+    this objective will encourage them all to be different.
+
+    In particular, it calculates the correlation matrix of activations at layer
+    for each image, and then penalizes cosine similarity between them. This is
+    very similar to ideas in style transfer, except we're *penalizing* style
+    similarity instead of encouraging it.
+
+    Args:
+        layer: layer to evaluate activation correlations on.
+
+    Returns:
+        Objective.
+    """
+
+    def inner(model):
+        layer_t = model(layer)
+        # print(model("blocks_0_norm1"))
+        # print(model("blocks_0_norm1").shape)
+
+        # TODO: Maybe fix how transformer input is used here, this is kinda awk
+        batches, patches, d_model = model(transformer_input).shape
+
+        qkv = layer_t.reshape(batches, patches, 3, num_attention_heads, d_model // num_attention_heads).permute(2, 0, 3, 1, 4)
+        q, k = qkv[0], qkv[1]
+
+        # 1, num_heads, num_patches, num_patches
+        attn = (q @ k.transpose(-2, -1)) * (d_model // num_attention_heads)
         
-        return attn[:, head_ix, patch_ix, softmax_neuron_ix].mean()
+        # return attn[:, head_ix, q_ix, :][0].argmax()
+        return torch.argmax(attn[:, head_ix, q_ix, :][0])
+    return inner
+
+
+@wrap_objective()
+def attention_pre_softmax_qk_match_patch(layer, transformer_input, head_ix, num_attention_heads=6):
+    """Encourage diversity between each batch element.
+
+    A neural net feature often responds to multiple things, but naive feature
+    visualization often only shows us one. If you optimize a batch of images,
+    this objective will encourage them all to be different.
+
+    In particular, it calculates the correlation matrix of activations at layer
+    for each image, and then penalizes cosine similarity between them. This is
+    very similar to ideas in style transfer, except we're *penalizing* style
+    similarity instead of encouraging it.
+
+    Args:
+        layer: layer to evaluate activation correlations on.
+
+    Returns:
+        Objective.
+    """
+
+    def inner(model):
+        layer_t = model(layer)
+        # print(model("blocks_0_norm1"))
+        # print(model("blocks_0_norm1").shape)
+
+        # TODO: Maybe fix how transformer input is used here, this is kinda awk
+        batches, patches, d_model = model(transformer_input).shape
+
+        qkv = layer_t.reshape(batches, patches, 3, num_attention_heads, d_model // num_attention_heads).permute(2, 0, 3, 1, 4)
+        q, k = qkv[0], qkv[1]
+
+        # 1, num_heads, num_patches, num_patches
+        attn = (q @ k.transpose(-2, -1)) * (d_model // num_attention_heads)
+        
+        return torch.diagonal(attn[:, head_ix, :, :], dim1=1, dim2=2).mean()
+    return inner
+
+@wrap_objective()
+def attention_pre_softmax_neuron_given_query(layer, transformer_input, head_ix, patch_ix, softmax_patch_ix, num_attention_heads=6):
+    """Encourage diversity between each batch element.
+
+    A neural net feature often responds to multiple things, but naive feature
+    visualization often only shows us one. If you optimize a batch of images,
+    this objective will encourage them all to be different.
+
+    In particular, it calculates the correlation matrix of activations at layer
+    for each image, and then penalizes cosine similarity between them. This is
+    very similar to ideas in style transfer, except we're *penalizing* style
+    similarity instead of encouraging it.
+
+    Args:
+        layer: layer to evaluate activation correlations on.
+
+    Returns:
+        Objective.
+    """
+
+    def inner(model_k, model_q):
+        # TODO: Maybe fix how transformer input is used here, this is kinda awk
+        batches, patches, d_model = model_q(transformer_input).shape # These dims will be the same because the models are just copies of each other
+
+        q_layer_t = model_q(layer)
+        qkv = q_layer_t.reshape(batches, patches, 3, num_attention_heads, d_model // num_attention_heads).permute(2, 0, 3, 1, 4)
+        q = qkv[0]
+
+        k_layer_t = model_k(layer)
+        qkv = k_layer_t.reshape(batches, patches, 3, num_attention_heads, d_model // num_attention_heads).permute(2, 0, 3, 1, 4)
+        k = qkv[1]
+
+        attn = (q @ k.transpose(-2, -1)) * (d_model // num_attention_heads)
+        
+        return attn[:, head_ix, patch_ix, softmax_patch_ix].mean()
     return inner
 
 
