@@ -14,12 +14,13 @@
 # ==============================================================================
 
 from __future__ import absolute_import, division, print_function
-
-import numpy as np
 import torch
-import torch.nn.functional as F
-from decorator import decorator
-from lucent.optvis.objectives_util import _make_arg_str, _extract_act_pos, _T_handle_batch
+
+
+def full_residual_stream(layer, patch_ix):
+    def inner(model):
+        return model(layer)[0, patch_ix, :]
+    return inner
 
 
 def deit_attention_pattern(layer, transformer_input, head_ix, patch_ix, num_attention_heads=6):
