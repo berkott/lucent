@@ -2,6 +2,7 @@
 
 # Lucent
 
+During testing, install it as `pip install -e lucent`
 
 TODO:
 - Should I move the model hooks into the param folder or into some other folder??? I'm not sure bc its a bit awk rn where it is...

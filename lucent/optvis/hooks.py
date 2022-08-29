@@ -39,7 +39,7 @@ class ModelHooks:
             else:
                 assert layer in self.features, f"Invalid layer {layer}. Retrieve the list of layers with `lucent.modelzoo.util.get_model_layers(model)`."
                 out = self.features[layer].features
-            assert out is not None, "There are no saved feature maps. Make sure to put the model in eval mode, like so: `model.to(device).eval()`. See README for example."
+            # assert out is not None, "There are no saved feature maps. Make sure to put the model in eval mode, like so: `model.to(device).eval()`. See README for example." TODO: See if I can uncomment this line??
             return out
 
         return hook

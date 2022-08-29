@@ -25,8 +25,7 @@ from PIL import Image
 import torch
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 
-from lucent.optvis import objectives
-from lucent.optvis import hooks
+from lucent.optvis import objectives, hooks
 
 
 def get_activation(
